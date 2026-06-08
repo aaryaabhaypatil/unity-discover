@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+<body>
+    <!-- Status overlay (starting / capturing / done) -->
+    <div id="status-overlay">
+        <div class="overlay-card"><h2>Connecting…</h2></div>
+    </div>
+
+    <div class="image-path"></div>
+    <div class="text-path"></div>
+    <div class="main-image"></div>
+
+    <div style="display: flex; align-items: center; gap: 1em; flex-wrap: wrap;">
+        <div style="background-color: rgb(231, 129, 12);" class="btn action-btn next-label-btn" onclick="doLabelText()">
+            Added text "<span class="next-label"></span>"
+        </div>
+        <div style="background-color: rgb(104, 206, 2);" class="btn action-btn" onclick="doGrid()">Opened new grid</div>
+        <div style="background-color: rgb(101, 16, 120);" class="btn action-btn" onclick="doNothing()">Nothing happened</div>
+        <div style="display: contents;" class="past-actions"></div>
+    </div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1em;">
+        <div class="group">
+            <div style="background-color: rgb(166, 90, 3);" class="btn action-btn" onclick="doCustomText()">Added text:</div>
+            <input id="custom-text-input" placeholder="type text added…" onkeydown="if(event.key==='Enter') doCustomText()">
+        </div>
+        <div class="group">
+            <div style="background-color: rgb(11, 57, 164);" class="btn action-btn" onclick="doAction()">New action:</div>
+            <input id="action-input" placeholder="describe action…" onkeydown="if(event.key==='Enter') doAction()">
+        </div>
+        <div style="background-color: rgb(180,20,20);" class="btn" onclick="doReset()" style="margin-left:auto">Reset</div>
+    </div>
+</body>
+
+<style>
+    body {
+        --main-image-height: 59vh;
+        --path-height: 15vh;
+        --rows: 4;
+        --cols: 9;
+        display: flex;
+        flex-direction: column;
+        gap: 1em;
+    }
+    .btn {
+        background-color: #007BFF;
+        color: white;
+        padding: 1.5em 3em;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+    .group {
+        display: flex;
+        align-items: center;
+        gap: 1em;
+    }
+    .group input {
+        font-size: 1.8em;
+        font-family: inherit;
+    }
+    .image-path {
+        display: flex;
+        gap: 1em;
+        --im-height: var(--path-height);
+        height: var(--path-height);
+        justify-content: center;
+    }
+    .image-path .arrow {
+        font-size: 2em;
+        display: flex;
+        align-items: center;
+    }
+    .image-path .arrow::after {
+        content: "→";
+    }
+
+    .main-image {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: var(--main-image-height);
+        --im-height: var(--main-image-height);
+        
+    }
+    /* .main-image > div {
+        display: flex;
+    }
+    .main-image img {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+    } */
+
+    
+    .image-wrapper {
+        position: relative;
+        overflow: hidden;
+        height: 100%;        /* fill the .main-image flex container */
+    }
+
+    .image-wrapper img {
+        display: block;
+        max-width: 100%;
+        max-height: var(--im-height);
+        width: auto;
+    }
+
+    .overlay {
+        position: absolute;
+        
+        --x: var(--x-start, 0);
+        --y: var(--y-start, 0);
+        
+
+        top: calc(var(--y) * 100% / var(--rows) );
+        left: calc(var(--x) * (100% / var(--cols)));
+        width: calc(100% / var(--cols));
+        height: calc(100% / var(--rows));
+        border: calc(var(--im-height) / 80) solid rgba(39, 13, 3, 0.922);
+        pointer-events: none;
+        box-sizing: border-box;
+        box-shadow: 0px 0px 100px 40px rgba(15, 5, 0, 0.996);
+    }
+    .text-path {
+        font-size: 1.5em;
+        text-align: center;
+    }
+
+    .past-action {
+        opacity: 0.7;
+        font-size: 0.85em;
+        padding: 0.8em 1.5em;
+    }
+
+    /* Full-screen overlay for starting / capturing / done states */
+    #status-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.75);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+    }
+    .overlay-card {
+        background: #1e1e1e;
+        color: #eee;
+        border-radius: 12px;
+        padding: 2.5em 3.5em;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        gap: 1em;
+        min-width: 320px;
+    }
+    .overlay-card h2 { margin: 0; font-size: 1.6em; }
+    .overlay-card p  { margin: 0; opacity: 0.8; }
+</style>
+
+<script>
+    let _lastStatus = null;
+    let _lastDataJson = null;
+    let _submitting = false;
+
+    // ---------------------------------------------------------------------------
+    // API
+    // ---------------------------------------------------------------------------
+
+    async function post(url, body) {
+        _submitting = true;
+        setButtonsDisabled(true);
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                console.error('Request failed:', res.status, data);
+                throw new Error(data.error || res.statusText || 'Request failed');
+            }
+            return data;
+        } finally {
+            _submitting = false;
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rendering
+    // ---------------------------------------------------------------------------
+
+    function makeImageWrapper(info) {
+        const wrap = document.createElement('div');
+        wrap.classList.add('image-wrapper');
+        const img = document.createElement('img');
+        img.src = info.pageImage;
+        img.alt = "Path Image";
+        wrap.appendChild(img);
+
+        wrap.style.setProperty('--x-start', info.nextCell[1]);
+        wrap.style.setProperty('--y-start', info.nextCell[0]);
+
+        const overlay = document.createElement('div');
+        overlay.classList.add('overlay');
+        wrap.appendChild(overlay);
+
+        return wrap;
+    }
+
+    function cS(cell) {
+        return `(${cell[0]+1}, ${cell[1]+1})`;
+    }
+
+    function render(data) {
+        const pathContainer = document.querySelector('.image-path');
+        const mainImageContainer = document.querySelector('.main-image');
+        const textPathContainer = document.querySelector('.text-path');
+
+        textPathContainer.textContent = "HOME → " + data.path.map(p => p.nextLabel || cS(p.nextCell)).join(' → ')
+            + (data.path.length ? ' ⇒ ' : '') + (data.nextLabel || cS(data.nextCell));
+
+        pathContainer.innerHTML = '';
+        data.path.forEach((info, i) => {
+            if (i > 0) {
+                const arrow = document.createElement('div');
+                arrow.classList.add('arrow');
+                pathContainer.appendChild(arrow);
+            }
+            pathContainer.appendChild(makeImageWrapper(info));
+        });
+
+        mainImageContainer.innerHTML = '';
+        mainImageContainer.appendChild(makeImageWrapper(data));
+
+        const nextLabel = data.nextLabel;
+        const labelBtn = document.querySelector('.next-label-btn');
+        if (nextLabel) {
+            document.querySelector('.next-label').textContent = nextLabel;
+            labelBtn.style.display = null;
+        } else {
+            labelBtn.style.display = 'none';
+        }
+
+        const pastActionsContainer = document.querySelector('.past-actions');
+        pastActionsContainer.innerHTML = '';
+        (data.previousActions || []).forEach(action => {
+            const d = document.createElement('div');
+            d.textContent = action;
+            d.classList.add('btn', 'past-action', 'action-btn');
+            d.onclick = () => {
+                const input = document.getElementById('action-input');
+                input.value = action;
+                doAction();
+            };
+            pastActionsContainer.appendChild(d);
+        });
+    }
+
+    function showOverlay(html) {
+        document.getElementById('status-overlay').innerHTML = html;
+        document.getElementById('status-overlay').style.display = 'flex';
+    }
+
+    function hideOverlay() {
+        document.getElementById('status-overlay').style.display = 'none';
+    }
+
+    function setButtonsDisabled(disabled) {
+        document.querySelectorAll('.action-btn').forEach(b => {
+            b.style.opacity = disabled ? '0.4' : '1';
+            b.style.pointerEvents = disabled ? 'none' : '';
+        });
+    }
+
+    // ---------------------------------------------------------------------------
+    // Polling
+    // ---------------------------------------------------------------------------
+
+    async function poll() {
+        try {
+            console.log("Polling for state...");
+            const res = await fetch('/state');
+            const { status, data } = await res.json();
+            const dataJson = JSON.stringify(data);
+            console.log("Received status:", status, "data:", data);
+
+            if (status === _lastStatus && dataJson === _lastDataJson) return;
+            _lastStatus = status;
+            _lastDataJson = dataJson;
+
+            if (status === 'pending' && data) {
+                hideOverlay();
+                render(data);
+                setButtonsDisabled(false);
+
+            } else if (status === 'starting') {
+                showOverlay(`
+                    <div class="overlay-card">
+                        <h2>AAC Grid Explorer</h2>
+                        <p>Open the app to the <strong>HOME</strong> grid, then click Capture.</p>
+                        <button class="btn action-btn" onclick="doStart(false)">Capture Home Grid</button>
+                    </div>`);
+            } else if (status === 'resuming') {
+                showOverlay(`
+                    <div class="overlay-card">
+                        <h2>Resume session?</h2>
+                        <p>A previous session was found.</p>
+                        <div style="display:flex;gap:1em;justify-content:center">
+                            <button class="btn action-btn" style="background:#2a9d3f" onclick="doStart(false)">Resume</button>
+                            <button class="btn action-btn" style="background:#c0392b" onclick="doStart(true)">Start Fresh</button>
+                        </div>
+                    </div>`);
+            } else if (status === 'capturing') {
+                showOverlay(`<div class="overlay-card"><h2>📸 Capturing screenshot…</h2></div>`);
+            } else if (status === 'done') {
+                showOverlay(`<div class="overlay-card"><h2>✅ Exploration complete!</h2><p>All icons have been recorded.</p></div>`);
+            } else if (status === 'error') {
+                showOverlay(`<div class="overlay-card"><h2>❌ Error</h2><p>${data?.message || ''}</p></div>`);
+            }
+        } catch (e) {
+            // server not ready yet, keep polling
+        }
+    }
+
+    setInterval(poll, 600);
+    poll();
+
+    // ---------------------------------------------------------------------------
+    // Button actions
+    // ---------------------------------------------------------------------------
+
+    async function safePost(url, body) {
+        try {
+            return await post(url, body);
+        } catch (err) {
+            console.error(err);
+            alert(err.message || 'Request failed. Try again.');
+        }
+    }
+
+    async function doStart(fresh) {
+        console.log("Starting with fresh =", fresh);
+        await safePost('/respond', { fresh });
+        console.log("Start response sent");
+    }
+
+    async function doGrid() {
+        await safePost('/respond', { outcome: 'grid' });
+    }
+
+    async function doLabelText() {
+        const label = document.querySelector('.next-label').textContent;
+        await safePost('/respond', { outcome: 'text', text_added: label + ' ' });
+    }
+
+    async function doCustomText() {
+        const input = document.getElementById('custom-text-input');
+        if (!input.value.trim()) {
+            input.style.outline = '3px solid red';
+            input.focus();
+            return;
+        }
+        input.style.outline = '';
+        await safePost('/respond', { outcome: 'text', text_added: input.value.trim() });
+        input.value = '';
+    }
+
+    async function doAction() {
+        const input = document.getElementById('action-input');
+        if (!input.value.trim()) {
+            input.style.outline = '3px solid red';
+            input.focus();
+            return;
+        }
+        input.style.outline = '';
+        await safePost('/respond', { outcome: 'action', action_description: input.value.trim() });
+        input.value = '';
+    }
+
+    async function doNothing() {
+        await post('/respond', { outcome: 'nothing' });
+    }
+
+    async function doReset() {
+        if (!confirm('Delete all saved state and start fresh?')) return;
+        await fetch('/reset', { method: 'POST' });
+    }
+</script>
+</html>
